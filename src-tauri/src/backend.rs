@@ -16,6 +16,9 @@ pub trait Backend: Send + Sync {
     ) -> Result<InferenceStats, String>;
 
     fn stop(&self);
+
+    /// Effective context window in tokens (what the runtime will actually process).
+    fn context_size(&self) -> u32;
 }
 
 pub enum BackendKind {

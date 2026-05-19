@@ -8,6 +8,7 @@ mod state;
 use std::sync::{atomic::Ordering, OnceLock};
 use tauri::{AppHandle, Manager, RunEvent};
 
+use commands::browser::fetch_url;
 use commands::inference::{cancel_inference, load_model, send_message, unload_model};
 use commands::models::{
     cancel_download, download_hf_model, download_model, fetch_hf_quants, get_model_file_size,
@@ -145,6 +146,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            // Browser tool
+            fetch_url,
             // Catalog & model management
             list_catalog,
             list_installed,

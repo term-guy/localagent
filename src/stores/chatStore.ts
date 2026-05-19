@@ -5,6 +5,9 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { v4 as uuidv4 } from 'uuid'
 import type { ChatMessage, SessionMeta, InferenceStats } from '@/types'
 import { useModelStore } from '@/stores/modelStore'
+import { parseToolCall, executeTool } from '@/composables/useTools'
+
+const MAX_TOOL_LOOPS = 5
 
 interface PendingAttachments {
   image?: string
@@ -20,6 +23,11 @@ export const useChatStore = defineStore('chat', () => {
   const streamingContent = ref('')
   const unlisteners = ref<UnlistenFn[]>([])
 
+  // Tracks the tool context for the current turn so the loop can re-use it
+  const currentToolContext = ref<string | null>(null)
+  const toolLoopCount = ref(0)
+  const toolExecuting = ref(false)
+
   const activeSession = computed(() =>
     sessions.value.find((s) => s.id === activeSessionId.value) ?? null,
   )
@@ -29,7 +37,6 @@ export const useChatStore = defineStore('chat', () => {
       if (e.payload.session_id !== activeSessionId.value) return
       streamingContent.value += e.payload.token
 
-      // Update the last assistant message in place
       const last = messages.value[messages.value.length - 1]
       if (last && last.role === 'assistant') {
         last.content = streamingContent.value
@@ -46,6 +53,50 @@ export const useChatStore = defineStore('chat', () => {
         if (last && last.role === 'assistant') {
           last.stats = e.payload.stats
         }
+
+        // Tool-call loop: if the model emitted a tool call and we haven't hit the cap, execute it
+        if (last && last.role === 'assistant' && toolLoopCount.value < MAX_TOOL_LOOPS) {
+          const call = parseToolCall(last.content)
+          if (call) {
+            toolLoopCount.value++
+            toolExecuting.value = true
+            let toolResult: string
+            try {
+              toolResult = await executeTool(call.name, call.arguments)
+            } catch (err) {
+              toolResult = `Tool error: ${err}`
+            }
+            toolExecuting.value = false
+
+            const toolMsg: ChatMessage = {
+              id: uuidv4(),
+              role: 'user',
+              content: `[Tool result: ${call.name}]\n${toolResult}`,
+              timestamp: new Date().toISOString(),
+            }
+            const nextAssistant: ChatMessage = {
+              id: uuidv4(),
+              role: 'assistant',
+              content: '',
+              timestamp: new Date().toISOString(),
+            }
+            messages.value.push(toolMsg, nextAssistant)
+            isStreaming.value = true
+            streamingContent.value = ''
+
+            await invoke('send_message', {
+              sessionId: activeSessionId.value,
+              messages: messages.value.filter((m) => m.id !== nextAssistant.id),
+              imagePath: null,
+              audioPath: null,
+              toolContext: currentToolContext.value,
+            })
+            return
+          }
+        }
+
+        toolLoopCount.value = 0
+        toolExecuting.value = false
         await persistSession()
       },
     )
@@ -56,7 +107,8 @@ export const useChatStore = defineStore('chat', () => {
         if (e.payload.session_id !== activeSessionId.value) return
         isStreaming.value = false
         streamingContent.value = ''
-        // Replace streaming placeholder with error message
+        toolLoopCount.value = 0
+        toolExecuting.value = false
         const last = messages.value[messages.value.length - 1]
         if (last && last.role === 'assistant') {
           last.content = `⚠️ Error: ${e.payload.error}`
@@ -96,13 +148,12 @@ export const useChatStore = defineStore('chat', () => {
     return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + '…'
   }
 
-  async function sendMessage(content: string) {
+  async function sendMessage(content: string, toolContext?: string | null) {
     if (!content.trim() || isStreaming.value) return
 
     const modelStore = useModelStore()
     if (!modelStore.activeModelId) throw new Error('No model selected')
 
-    // Ensure session exists
     if (!activeSessionId.value) {
       await newSession()
     }
@@ -128,7 +179,6 @@ export const useChatStore = defineStore('chat', () => {
 
     messages.value.push(userMsg, assistantMsg)
 
-    // Show session in sidebar immediately on first message
     if (isFirstMessage && !sessions.value.find((s) => s.id === activeSessionId.value)) {
       sessions.value.unshift({
         id: activeSessionId.value!,
@@ -141,11 +191,12 @@ export const useChatStore = defineStore('chat', () => {
 
     isStreaming.value = true
     streamingContent.value = ''
+    currentToolContext.value = toolContext ?? null
+    toolLoopCount.value = 0
 
     const { image, audio } = pendingAttachments.value
     pendingAttachments.value = {}
 
-    // Ensure model is loaded
     await invoke('load_model', { modelId: modelStore.activeModelId })
 
     await invoke('send_message', {
@@ -153,6 +204,7 @@ export const useChatStore = defineStore('chat', () => {
       messages: messages.value.filter((m) => m.role !== 'assistant' || m.id !== assistantMsg.id),
       imagePath: image ?? null,
       audioPath: audio ?? null,
+      toolContext: toolContext ?? null,
     })
   }
 
@@ -160,6 +212,8 @@ export const useChatStore = defineStore('chat', () => {
     await invoke('cancel_inference')
     isStreaming.value = false
     streamingContent.value = ''
+    toolLoopCount.value = 0
+    toolExecuting.value = false
   }
 
   async function persistSession() {
@@ -205,6 +259,7 @@ export const useChatStore = defineStore('chat', () => {
     activeSessionId,
     messages,
     isStreaming,
+    toolExecuting,
     pendingAttachments,
     streamingContent,
     activeSession,

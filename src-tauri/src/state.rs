@@ -7,6 +7,7 @@ pub struct LoadedModel {
     pub backend: Arc<dyn Backend>,
     pub model_id: String,
     pub backend_name: String,
+    pub context_size: u32,
 }
 
 pub struct AppState {

@@ -57,19 +57,38 @@ struct ApiMsg {
 fn build_messages_json(
     messages: &[ChatMessage],
     image_path: &Option<String>,
+    tool_context: &Option<String>,
 ) -> Result<String, String> {
     let last_id = messages.last().map(|m| m.id.as_str()).unwrap_or("");
 
     let mut api_msgs: Vec<ApiMsg> = Vec::with_capacity(messages.len() + 1);
 
-    if messages.first().map(|m| m.role.as_str()) != Some("system") {
+    let has_system = messages.first().map(|m| m.role.as_str()) == Some("system");
+
+    if !has_system {
+        let base = "You are a helpful AI assistant.";
+        let system_content = match tool_context {
+            Some(ctx) => format!("{base}\n\n{ctx}"),
+            None => base.to_string(),
+        };
         api_msgs.push(ApiMsg {
             role: "system".into(),
-            content: serde_json::Value::String("You are a helpful AI assistant.".into()),
+            content: serde_json::Value::String(system_content),
         });
     }
 
     for m in messages {
+        if m.role == "system" {
+            let content = match tool_context {
+                Some(ctx) => format!("{}\n\n{ctx}", m.content),
+                None => m.content.clone(),
+            };
+            api_msgs.push(ApiMsg {
+                role: "system".into(),
+                content: serde_json::Value::String(content),
+            });
+            continue;
+        }
         if m.role == "user" && m.id == last_id {
             if let Some(img) = image_path {
                 let content = serde_json::json!([
@@ -119,7 +138,7 @@ mod tests {
             },
         ];
 
-        let json = build_messages_json(&messages, &None).unwrap();
+        let json = build_messages_json(&messages, &None, &None).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
 
         // First message should be the system prompt
@@ -154,7 +173,7 @@ mod tests {
             },
         ];
 
-        let json = build_messages_json(&messages, &None).unwrap();
+        let json = build_messages_json(&messages, &None, &None).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.len(), 2);
@@ -195,7 +214,7 @@ mod tests {
             },
         ];
 
-        let json = build_messages_json(&messages, &None).unwrap();
+        let json = build_messages_json(&messages, &None, &None).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.len(), 4); // system + 3 messages
@@ -221,7 +240,7 @@ mod tests {
             },
         ];
 
-        let json = build_messages_json(&messages, &Some("/path/to/img.png".into())).unwrap();
+        let json = build_messages_json(&messages, &Some("/path/to/img.png".into()), &None).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
 
         // Last user message should have multimodal content
@@ -290,7 +309,7 @@ mod tests {
     #[test]
     fn test_build_messages_json_empty_messages() {
         let messages = vec![];
-        let json = build_messages_json(&messages, &None).unwrap();
+        let json = build_messages_json(&messages, &None, &None).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
 
         // Even with empty messages, system prompt is added
@@ -348,7 +367,7 @@ mod tests {
             },
         ];
 
-        let json = build_messages_json(&messages, &Some("/img.png".into())).unwrap();
+        let json = build_messages_json(&messages, &Some("/img.png".into()), &None).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
 
         // User message content stays a plain string — no image array
@@ -390,7 +409,7 @@ mod tests {
 
         // Image is attached — only the last message (which happens to be
         // the last user message) should get the multimodal content.
-        let json = build_messages_json(&messages, &Some("/img.png".into())).unwrap();
+        let json = build_messages_json(&messages, &Some("/img.png".into()), &None).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.len(), 4); // system + 3 messages
@@ -469,12 +488,14 @@ pub fn load_model(
         .ok_or("Invalid path encoding")?;
 
     let loaded_backend = load_backend(backend_kind, model_path_str)?;
+    let context_size = loaded_backend.context_size();
 
     let mut guard = state.model.lock().unwrap();
     *guard = Some(LoadedModel {
         backend: Arc::from(loaded_backend),
         model_id,
         backend_name: backend_str,
+        context_size,
     });
 
     Ok(())
@@ -495,6 +516,7 @@ pub async fn send_message(
     messages: Vec<ChatMessage>,
     image_path: Option<String>,
     audio_path: Option<String>,
+    tool_context: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -517,7 +539,7 @@ pub async fn send_message(
     let cancel_flag = Arc::new(AtomicBool::new(false));
     *state.inference_cancel.lock().unwrap() = Some(Arc::clone(&cancel_flag));
 
-    let messages_json = build_messages_json(&messages, &image_path)?;
+    let messages_json = build_messages_json(&messages, &image_path, &tool_context)?;
     let pcm_data: Option<Vec<u8>> = if let Some(ref path) = audio_path {
         Some(read_wav_pcm(path)?)
     } else {

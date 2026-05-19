@@ -147,4 +147,10 @@ impl Backend for CactusBackend {
     fn stop(&self) {
         unsafe { cactus_sys::cactus_stop(self.ptr) };
     }
+
+    fn context_size(&self) -> u32 {
+        // cactus-sys doesn't expose n_ctx_train via FFI; use the same default
+        // we'd configure for llama.cpp so the browser budget is consistent.
+        4096
+    }
 }

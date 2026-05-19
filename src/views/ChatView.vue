@@ -7,6 +7,8 @@ import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import type { InstalledModel } from '@/types'
 import MarkdownIt from 'markdown-it'
+import ToolsMenu from '@/components/ToolsMenu.vue'
+import { getToolSystemPrompt, parseToolCall } from '@/composables/useTools'
 
 const chatStore = useChatStore()
 const modelStore = useModelStore()
@@ -91,7 +93,7 @@ async function send() {
     inputEl.value.style.height = 'auto'
   }
   try {
-    await chatStore.sendMessage(text)
+    await chatStore.sendMessage(text, getToolSystemPrompt())
   } catch (e) {
     show(`Send failed: ${e}`, 'error')
   }
@@ -207,33 +209,88 @@ function modelOptionLabel(m: InstalledModel) {
 
 interface ParsedContent {
   thinkBlocks: string[]
+  activeThinkContent: string
   responseContent: string
   isThinking: boolean
 }
 
-function parseContent(content: string, isActive = false): ParsedContent {
+interface ToolCallInfo {
+  name: string
+  args: Record<string, string>
+  rawContent: string
+}
+
+interface ToolResultInfo {
+  name: string
+  result: string
+}
+
+// Strip all tool call variants from content so they don't appear in the chat bubble.
+// Handles: <tool_call>...</tool_call>, ```json...```, and bare JSON objects.
+function stripToolCallFromContent(content: string): string {
+  // XML wrapper
+  let out = content.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+  // Markdown code block (only if it looks like a tool call)
+  out = out.replace(/```(?:json)?\s*\n?\{[\s\S]*?\}\s*\n?```/g, '')
+  // Bare JSON object at start of content (nothing meaningful before/after)
+  // Only strip if the whole remaining content is essentially the JSON
+  const trimmed = out.trim()
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    out = ''
+  }
+  return out.trim()
+}
+
+function parseContent(content: string, toolCall: ToolCallInfo | null, isActive = false): ParsedContent {
+  const stripped = toolCall ? stripToolCallFromContent(content) : content
   const thinkBlocks: string[] = []
-  let rest = content.replace(/<think>([\s\S]*?)<\/think>/gi, (_, block) => {
+  let rest = stripped.replace(/<think>([\s\S]*?)<\/think>/gi, (_, block) => {
     thinkBlocks.push(block.trim())
     return ''
   })
   const hasUnclosedTag = /<think>/i.test(rest)
   if (hasUnclosedTag && !isActive) {
-    // Stream ended with an unclosed tag — render the content as normal text
     rest = rest.replace(/<think>/gi, '').trim()
-    return { thinkBlocks, responseContent: rest, isThinking: false }
+    return { thinkBlocks, activeThinkContent: '', responseContent: rest, isThinking: false }
   }
   const isThinking = hasUnclosedTag
+  let activeThinkContent = ''
+  if (isThinking) {
+    const match = rest.match(/<think>([\s\S]*)$/i)
+    activeThinkContent = match ? match[1].trim() : ''
+  }
   rest = rest.replace(/<think>[\s\S]*$/i, '').trim()
-  return { thinkBlocks, responseContent: rest, isThinking }
+  return { thinkBlocks, activeThinkContent, responseContent: rest, isThinking }
+}
+
+function detectToolCall(content: string): ToolCallInfo | null {
+  const result = parseToolCall(content)
+  if (!result) return null
+  // Derive a display-friendly rawContent string
+  const xmlMatch = content.match(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/i)
+  const mdMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/)
+  const rawContent = xmlMatch?.[1]?.trim() ?? mdMatch?.[1]?.trim() ?? JSON.stringify(result, null, 2)
+  return { name: result.name, args: result.arguments, rawContent }
+}
+
+function detectToolResult(content: string): ToolResultInfo | null {
+  const match = content.match(/^\[Tool result: ([^\]]+)\]\n([\s\S]*)$/)
+  if (!match) return null
+  return { name: match[1].trim(), result: match[2].trim() }
 }
 
 const parsedMessages = computed(() =>
   chatStore.messages.map((msg, i) => {
     const isActive = chatStore.isStreaming && i === chatStore.messages.length - 1
+    const toolCall = msg.role === 'assistant' ? detectToolCall(msg.content) : null
+    const toolResult = msg.role === 'user' ? detectToolResult(msg.content) : null
     return {
       ...msg,
-      parsed: msg.role === 'assistant' ? parseContent(msg.content, isActive) : null as ParsedContent | null,
+      parsed: msg.role === 'assistant'
+        ? parseContent(msg.content, toolCall, isActive)
+        : null as ParsedContent | null,
+      toolCall,
+      toolResult,
     }
   }),
 )
@@ -244,6 +301,17 @@ function renderMarkdown(content: string) {
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+const copiedId = ref<string | null>(null)
+
+function copyMessage(msg: { id: string; role: string; content: string; parsed?: ParsedContent | null }) {
+  const text = msg.role === 'assistant' && msg.parsed
+    ? msg.parsed.responseContent
+    : msg.content
+  navigator.clipboard.writeText(text)
+  copiedId.value = msg.id
+  setTimeout(() => { copiedId.value = null }, 1500)
 }
 </script>
 
@@ -306,6 +374,9 @@ function formatTime(iso: string) {
           No conversations yet
         </div>
       </div>
+
+      <!-- Tools -->
+      <ToolsMenu :sidebar-open="sidebarOpen" />
 
       <!-- Model selector -->
       <div v-if="sidebarOpen" class="px-3 py-3 border-t border-zinc-800">
@@ -394,101 +465,189 @@ function formatTime(iso: string) {
         </div>
 
         <!-- Message list -->
-        <div
-          v-for="msg in parsedMessages"
-          :key="msg.id"
-          class="flex"
-          :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
-        >
-          <!-- Assistant avatar -->
-          <div
-            v-if="msg.role === 'assistant'"
-            class="mr-2.5 mt-1 h-7 w-7 shrink-0 rounded-full bg-gradient-to-br
-                   from-primary-600 to-violet-700 flex items-center justify-center text-xs"
-          >
-            🤖
-          </div>
-
-          <div class="flex flex-col max-w-[75%]" :class="msg.role === 'user' ? 'items-end' : 'items-start'">
-            <!-- Image preview -->
-            <img
-              v-if="msg.image_path"
-              :src="`file://${msg.image_path}`"
-              class="mb-2 max-h-48 rounded-xl object-cover ring-1 ring-zinc-700"
-              alt="Attached image"
-            />
-
-            <!-- Audio indicator -->
-            <div
-              v-if="msg.audio_path"
-              class="mb-2 flex items-center gap-2 text-xs text-zinc-400 bg-zinc-800
-                     rounded-lg px-3 py-2 ring-1 ring-zinc-700"
-            >
-              🎙️ Audio attached
-            </div>
-
-            <!-- Thinking: in-progress animation -->
-            <div
-              v-if="msg.parsed?.isThinking"
-              class="mb-1.5 flex items-center gap-2 rounded-xl border border-zinc-700/50
-                     bg-zinc-900/60 px-3 py-2 text-xs text-zinc-500 w-full"
-            >
-              <span class="flex gap-0.5">
-                <span class="h-1.5 w-1.5 rounded-full bg-zinc-500 animate-bounce" style="animation-delay:0ms" />
-                <span class="h-1.5 w-1.5 rounded-full bg-zinc-500 animate-bounce" style="animation-delay:120ms" />
-                <span class="h-1.5 w-1.5 rounded-full bg-zinc-500 animate-bounce" style="animation-delay:240ms" />
-              </span>
-              Thinking…
-            </div>
-
-            <!-- Thinking: completed blocks (collapsible) -->
-            <details
-              v-for="(block, i) in (msg.parsed?.thinkBlocks ?? [])"
-              :key="i"
-              class="mb-1.5 w-full rounded-xl border border-zinc-700/40 bg-zinc-900/50 text-xs overflow-hidden"
-            >
+        <template v-for="msg in parsedMessages" :key="msg.id">
+          <!-- Tool result row (user role with <tool_result> content) -->
+          <div v-if="msg.toolResult" class="flex justify-start">
+            <details class="rounded-xl border border-emerald-800/40 bg-emerald-950/30 text-xs
+                            overflow-hidden max-w-[75%]">
               <summary class="flex cursor-pointer select-none list-none items-center gap-1.5
-                              px-3 py-2 text-zinc-500 hover:text-zinc-400 transition-colors">
-                <span>💭</span>
-                <span>Thoughts</span>
-                <span class="ml-auto text-zinc-600 text-[10px]">click to expand</span>
+                              px-3 py-2 text-emerald-400 hover:text-emerald-300 transition-colors">
+                <span class="shrink-0">✅</span>
+                <span class="font-medium">{{ msg.toolResult.name }}</span>
+                <span class="text-emerald-600 mx-1">→</span>
+                <span class="text-emerald-300 truncate">
+                  {{ msg.toolResult.result.slice(0, 80) }}{{ msg.toolResult.result.length > 80 ? '…' : '' }}
+                </span>
+                <span class="ml-auto pl-2 text-emerald-700 text-[10px] shrink-0">expand</span>
               </summary>
-              <div class="border-t border-zinc-700/40 px-3 py-2.5 text-zinc-400 prose-chat" v-html="renderMarkdown(block)" />
+              <div class="border-t border-emerald-800/30 px-3 py-2.5 text-emerald-200/70
+                          whitespace-pre-wrap break-words max-h-64 overflow-y-auto font-mono">
+                {{ msg.toolResult.result }}
+              </div>
             </details>
-
-            <!-- Bubble (hidden while model is still mid-think and has no response yet) -->
-            <div
-              v-if="!msg.parsed?.isThinking || msg.parsed?.responseContent"
-              class="rounded-2xl px-4 py-3 text-sm"
-              :class="msg.role === 'user'
-                ? 'bg-primary-700 text-white rounded-tr-sm'
-                : 'bg-zinc-800 rounded-tl-sm'"
-            >
-              <div
-                v-if="msg.role === 'assistant'"
-                class="prose-chat"
-                v-html="renderMarkdown(msg.parsed!.responseContent)"
-              />
-              <p v-else class="selectable whitespace-pre-wrap">{{ msg.content }}</p>
-            </div>
-
-            <div class="flex items-center gap-2 mt-1 px-1">
-              <span class="text-xs text-zinc-600">{{ formatTime(msg.timestamp) }}</span>
-              <template v-if="msg.role === 'assistant' && msg.stats">
-                <span class="text-zinc-700 text-xs">·</span>
-                <span class="text-xs text-zinc-600">
-                  {{ msg.stats.tokens_per_second.toFixed(1) }} tok/s
-                </span>
-                <span class="text-zinc-700 text-xs">·</span>
-                <span class="text-xs text-zinc-600">{{ msg.stats.tokens_generated }} tokens</span>
-                <span class="text-zinc-700 text-xs">·</span>
-                <span class="text-xs text-zinc-600">
-                  {{ (msg.stats.duration_ms / 1000).toFixed(1) }}s
-                </span>
-              </template>
-            </div>
           </div>
-        </div>
+
+          <!-- Normal message row -->
+          <div
+            v-else
+            class="group/msg flex"
+            :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
+          >
+            <!-- Assistant avatar -->
+            <div
+              v-if="msg.role === 'assistant'"
+              class="mr-2.5 mt-1 h-7 w-7 shrink-0 rounded-full bg-gradient-to-br
+                     from-primary-600 to-violet-700 flex items-center justify-center text-xs"
+            >
+              🤖
+            </div>
+
+            <!-- Copy button: left of bubble for user messages -->
+            <button
+              v-if="msg.role === 'user'"
+              class="invisible group-hover/msg:visible self-start mt-2 mr-1.5 shrink-0 rounded-md p-1.5
+                     text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+              :class="copiedId === msg.id ? '!visible !text-emerald-400' : ''"
+              :title="copiedId === msg.id ? 'Copied!' : 'Copy'"
+              @click="copyMessage(msg)"
+            >
+              <svg v-if="copiedId !== msg.id" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+              <svg v-else xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </button>
+
+            <div class="flex flex-col max-w-[75%]" :class="msg.role === 'user' ? 'items-end' : 'items-start'">
+              <!-- Image preview -->
+              <img
+                v-if="msg.image_path"
+                :src="`file://${msg.image_path}`"
+                class="mb-2 max-h-48 rounded-xl object-cover ring-1 ring-zinc-700"
+                alt="Attached image"
+              />
+
+              <!-- Audio indicator -->
+              <div
+                v-if="msg.audio_path"
+                class="mb-2 flex items-center gap-2 text-xs text-zinc-400 bg-zinc-800
+                       rounded-lg px-3 py-2 ring-1 ring-zinc-700"
+              >
+                🎙️ Audio attached
+              </div>
+
+              <!-- Thinking: in-progress (expandable) -->
+              <details
+                v-if="msg.parsed?.isThinking"
+                class="mb-1.5 w-full rounded-xl border border-zinc-700/50 bg-zinc-900/60 text-xs overflow-hidden"
+              >
+                <summary class="flex cursor-pointer select-none list-none items-center gap-1.5
+                                px-3 py-2 text-zinc-500 hover:text-zinc-400 transition-colors">
+                  <span class="flex gap-0.5">
+                    <span class="h-1.5 w-1.5 rounded-full bg-zinc-500 animate-bounce" style="animation-delay:0ms" />
+                    <span class="h-1.5 w-1.5 rounded-full bg-zinc-500 animate-bounce" style="animation-delay:120ms" />
+                    <span class="h-1.5 w-1.5 rounded-full bg-zinc-500 animate-bounce" style="animation-delay:240ms" />
+                  </span>
+                  <span>Thinking…</span>
+                  <span class="ml-auto text-zinc-600 text-[10px]">click to expand</span>
+                </summary>
+                <div
+                  v-if="msg.parsed?.activeThinkContent"
+                  class="border-t border-zinc-700/40 px-3 py-2.5 text-zinc-400 prose-chat max-h-64 overflow-y-auto"
+                  v-html="renderMarkdown(msg.parsed.activeThinkContent)"
+                />
+              </details>
+
+              <!-- Thinking: completed blocks (collapsible) -->
+              <details
+                v-for="(block, i) in (msg.parsed?.thinkBlocks ?? [])"
+                :key="i"
+                class="mb-1.5 w-full rounded-xl border border-zinc-700/40 bg-zinc-900/50 text-xs overflow-hidden"
+              >
+                <summary class="flex cursor-pointer select-none list-none items-center gap-1.5
+                                px-3 py-2 text-zinc-500 hover:text-zinc-400 transition-colors">
+                  <span>💭</span>
+                  <span>Thoughts</span>
+                  <span class="ml-auto text-zinc-600 text-[10px]">click to expand</span>
+                </summary>
+                <div class="border-t border-zinc-700/40 px-3 py-2.5 text-zinc-400 prose-chat" v-html="renderMarkdown(block)" />
+              </details>
+
+              <!-- Bubble: any text before/around the tool call renders here, before the chip -->
+              <div
+                v-if="(!msg.toolCall || msg.parsed?.responseContent) && (!msg.parsed?.isThinking || msg.parsed?.responseContent)"
+                class="rounded-2xl px-4 py-3 text-sm"
+                :class="msg.role === 'user'
+                  ? 'bg-primary-700 text-white rounded-tr-sm'
+                  : 'bg-zinc-800 rounded-tl-sm'"
+              >
+                <div
+                  v-if="msg.role === 'assistant'"
+                  class="prose-chat"
+                  v-html="renderMarkdown(msg.parsed!.responseContent)"
+                />
+                <p v-else class="selectable whitespace-pre-wrap">{{ msg.content }}</p>
+              </div>
+
+              <!-- Tool call chip (assistant emitted a tool call) -->
+              <details
+                v-if="msg.toolCall"
+                class="mb-1.5 w-full rounded-xl border border-amber-800/40 bg-amber-950/30
+                       text-xs overflow-hidden"
+              >
+                <summary class="flex cursor-pointer select-none list-none items-center gap-1.5
+                                px-3 py-2 text-amber-400 hover:text-amber-300 transition-colors">
+                  <span>🔧</span>
+                  <span class="font-medium">{{ msg.toolCall.name }}</span>
+                  <span class="text-amber-600 ml-1">
+                    ({{ Object.entries(msg.toolCall.args).map(([k,v]) => `${k}: "${v}"`).join(', ') }})
+                  </span>
+                  <span class="ml-auto text-amber-700 text-[10px]">expand</span>
+                </summary>
+                <div class="border-t border-amber-800/30 px-3 py-2 text-amber-200/60 font-mono break-all">
+                  {{ msg.toolCall.rawContent }}
+                </div>
+              </details>
+
+              <div class="flex items-center gap-2 mt-1 px-1">
+                <span class="text-xs text-zinc-600">{{ formatTime(msg.timestamp) }}</span>
+                <template v-if="msg.role === 'assistant' && msg.stats">
+                  <span class="text-zinc-700 text-xs">·</span>
+                  <span class="text-xs text-zinc-600">
+                    {{ msg.stats.tokens_per_second.toFixed(1) }} tok/s
+                  </span>
+                  <span class="text-zinc-700 text-xs">·</span>
+                  <span class="text-xs text-zinc-600">{{ msg.stats.tokens_generated }} tokens</span>
+                  <span class="text-zinc-700 text-xs">·</span>
+                  <span class="text-xs text-zinc-600">
+                    {{ (msg.stats.duration_ms / 1000).toFixed(1) }}s
+                  </span>
+                </template>
+              </div>
+            </div>
+
+            <!-- Copy button: right of bubble for assistant messages -->
+            <button
+              v-if="msg.role === 'assistant'"
+              class="invisible group-hover/msg:visible self-start mt-2 ml-1.5 shrink-0 rounded-md p-1.5
+                     text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+              :class="copiedId === msg.id ? '!visible !text-emerald-400' : ''"
+              :title="copiedId === msg.id ? 'Copied!' : 'Copy'"
+              @click="copyMessage(msg)"
+            >
+              <svg v-if="copiedId !== msg.id" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+              <svg v-else xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </button>
+          </div>
+        </template>
+
       </div>
 
       <!-- Input area -->

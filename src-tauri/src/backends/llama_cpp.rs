@@ -134,8 +134,22 @@ impl Backend for LlamaCppBackend {
             .map_err(|e| e.to_string())?;
 
         let n_ctx = 4096u32;
+
+        // Truncate the prompt to fit the context window. Keeping the tail means the
+        // most recent turns are preserved; the system message may be lost in extreme
+        // cases, but that is better than crashing.
+        let tokens = if tokens.len() >= n_ctx as usize {
+            tokens[tokens.len() - (n_ctx as usize - 1)..].to_vec()
+        } else {
+            tokens
+        };
+
+        // n_batch must be >= the number of prompt tokens fed to a single llama_decode
+        // call. Setting it equal to n_ctx guarantees the entire prompt can be
+        // processed in one shot and avoids the GGML_ASSERT(n_tokens_all <= n_batch).
         let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(Some(NonZeroU32::new(n_ctx).unwrap()));
+            .with_n_ctx(Some(NonZeroU32::new(n_ctx).unwrap()))
+            .with_n_batch(n_ctx);
 
         let mut ctx = self
             .model
@@ -238,4 +252,9 @@ impl Backend for LlamaCppBackend {
     }
 
     fn stop(&self) {}
+
+    fn context_size(&self) -> u32 {
+        // Cap at our configured n_ctx so callers see the actual usable window.
+        (self.model.n_ctx_train() as u32).min(4096)
+    }
 }

@@ -33,6 +33,7 @@ anyhow = "1"
 thiserror = "2"
 open = "5"
 zip = "2"
+scraper = "0.20"
 
 cactus-sys = { path = "/Users/luis/gitterm/cactus/rust/cactus-sys" }
 

@@ -71,6 +71,13 @@ export interface InferenceStats {
   tokens_per_second: number
 }
 
+export interface BrowseResult {
+  url: string
+  title: string
+  text: string
+  error?: string
+}
+
 export interface Toast {
   id: string
   message: string
