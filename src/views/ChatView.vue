@@ -87,7 +87,7 @@ function onInput(e: Event) {
 
 async function send() {
   const text = inputText.value.trim()
-  if (!text || chatStore.isStreaming || modelStore.modelLoading) return
+  if (!text || chatStore.isStreaming || modelStore.modelLoading || !modelStore.activeModelId) return
   inputText.value = ''
   if (inputEl.value) {
     inputEl.value.style.height = 'auto'
@@ -196,10 +196,19 @@ async function handleDeleteSession(sessionId: string) {
 
 function handleModelChange(e: Event) {
   const val = (e.target as HTMLSelectElement).value
+  if (!val) return
   const sep = val.lastIndexOf(':')
   const id = val.slice(0, sep)
   const backend = val.slice(sep + 1)
   modelStore.setActiveModel(id, backend)
+}
+
+async function handleUnloadModel() {
+  try {
+    await modelStore.unloadModel()
+  } catch (e) {
+    show(`Failed to unload: ${e}`, 'error')
+  }
 }
 
 function modelOptionLabel(m: InstalledModel) {
@@ -383,12 +392,21 @@ function copyMessage(msg: { id: string; role: string; content: string; parsed?: 
 
       <!-- Model selector -->
       <div v-if="sidebarOpen" class="px-3 py-3 border-t border-zinc-800">
-        <label class="text-xs text-zinc-500 mb-1 block">Active Model</label>
+        <div class="flex items-center justify-between mb-1">
+          <label class="text-xs text-zinc-500">Active Model</label>
+          <button
+            v-if="modelStore.activeModelId"
+            class="text-xs text-zinc-600 hover:text-zinc-400 transition-colors leading-none"
+            title="Unload model"
+            @click="handleUnloadModel"
+          >⏏</button>
+        </div>
         <select
           class="input-base text-xs py-1.5"
-          :value="`${modelStore.activeModelId}:${modelStore.activeModelBackend}`"
+          :value="modelStore.activeModelId ? `${modelStore.activeModelId}:${modelStore.activeModelBackend}` : ''"
           @change="handleModelChange"
         >
+          <option value="" disabled>— no model loaded —</option>
           <option
             v-for="m in modelStore.installed"
             :key="`${m.id}:${m.backend}`"
@@ -729,9 +747,9 @@ function copyMessage(msg: { id: string; role: string; content: string; parsed?: 
             ref="inputEl"
             v-model="inputText"
             rows="1"
-            :placeholder="modelStore.modelLoading ? 'Loading model…' : 'Message localagent… (Shift+Enter for new line)'"
+            :placeholder="!modelStore.activeModelId ? 'Select a model to start chatting…' : modelStore.modelLoading ? 'Loading model…' : 'Message localagent… (Shift+Enter for new line)'"
             class="input-base flex-1 resize-none min-h-[42px] max-h-36 py-2.5 leading-snug selectable"
-            :disabled="chatStore.isStreaming || modelStore.modelLoading"
+            :disabled="chatStore.isStreaming || modelStore.modelLoading || !modelStore.activeModelId"
             @input="onInput"
             @keydown="onKeydown"
           />
@@ -740,7 +758,7 @@ function copyMessage(msg: { id: string; role: string; content: string; parsed?: 
           <button
             v-if="!chatStore.isStreaming"
             class="btn-primary shrink-0 h-10 px-4"
-            :disabled="!inputText.trim() || modelStore.modelLoading"
+            :disabled="!inputText.trim() || modelStore.modelLoading || !modelStore.activeModelId"
             @click="send"
           >
             Send

@@ -36,7 +36,7 @@ This is a **Tauri v2 desktop app** (Rust backend + Vue 3 frontend) for fully off
 - `SettingsView` — model management (install, switch, remove)
 
 **Pinia stores** are the primary state layer:
-- `modelStore` — catalog, installed models, active model, download progress. Watches `activeModelId` and preloads the model into the Rust backend whenever it changes.
+- `modelStore` — catalog, installed models, active model, download progress. Watches `activeModelId` and preloads the model into the Rust backend whenever it changes. Active model (`activeModelId` + `activeModelBackend`) is persisted to `localStorage`; restored on startup by `loadInstalled`. The `initialized` flag ensures restore runs only once — `router/index.ts`'s `beforeEach` guard calls `loadInstalled()` on **every** navigation, so without this guard navigating would re-select a model the user just unloaded. `unloadModel()` clears both state and localStorage keys so the unloaded state survives app restart.
 - `chatStore` — sessions, messages, streaming state. Listens to Tauri events (`token`, `inference-complete`, `inference-error`) to stream tokens into the active message in real time. Also runs the **tool-call loop**: on `inference-complete`, if the last assistant message contains a `<tool_call>` block, `chatStore` executes the tool and re-invokes `send_message` (capped at 5 iterations). `toolExecuting: ref<boolean>` is exposed for the UI spinner.
 
 **Tool-calling system** (`src/composables/useTools.ts`):

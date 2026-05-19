@@ -30,6 +30,15 @@ onMounted(async () => {
   modelsDir.value = await invoke<string>('get_models_dir')
 })
 
+async function unloadActiveModel() {
+  try {
+    await modelStore.unloadModel()
+    show('Model unloaded', 'success')
+  } catch (e) {
+    show(`Failed to unload: ${e}`, 'error')
+  }
+}
+
 async function removeModel(model: InstalledModel) {
   const ok = await confirm({
     title: 'Remove Model',
@@ -201,9 +210,18 @@ function capBadge(cap: string) {
                     Active
                   </span>
                 </div>
-                <button class="btn-danger text-xs" @click="removeModel(model)">
-                  Remove
-                </button>
+                <div class="flex items-center gap-2">
+                  <button
+                    v-if="model.id === modelStore.activeModelId && model.backend === modelStore.activeModelBackend"
+                    class="btn-secondary text-xs"
+                    @click="unloadActiveModel"
+                  >
+                    Unload
+                  </button>
+                  <button class="btn-danger text-xs" @click="removeModel(model)">
+                    Remove
+                  </button>
+                </div>
               </div>
             </div>
 

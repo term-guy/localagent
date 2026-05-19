@@ -12,6 +12,7 @@ export const useModelStore = defineStore('model', () => {
   const modelLoading = ref(false)
   const downloadProgress = ref<Record<string, DownloadProgress>>({})
   const unlisteners = ref<UnlistenFn[]>([])
+  const initialized = ref(false)
 
   const installedIds = computed(() => new Set(installed.value.map((m) => m.id)))
   const activeModel = computed(() =>
@@ -29,9 +30,23 @@ export const useModelStore = defineStore('model', () => {
 
   async function loadInstalled() {
     installed.value = await invoke<InstalledModel[]>('list_installed')
-    if (!activeModelId.value && installed.value.length > 0) {
-      activeModelId.value = installed.value[0].id
-      activeModelBackend.value = installed.value[0].backend
+    if (!initialized.value) {
+      initialized.value = true
+      if (installed.value.length > 0) {
+        const savedId = localStorage.getItem('activeModelId')
+        const savedBackend = localStorage.getItem('activeModelBackend')
+        if (savedId && savedBackend) {
+          const saved = installed.value.find((m) => m.id === savedId && m.backend === savedBackend)
+          if (saved) {
+            activeModelId.value = saved.id
+            activeModelBackend.value = saved.backend
+          }
+        } else if (!savedId) {
+          // No explicit unload recorded — pick first model as default
+          activeModelId.value = installed.value[0].id
+          activeModelBackend.value = installed.value[0].backend
+        }
+      }
     }
   }
 
@@ -88,6 +103,22 @@ export const useModelStore = defineStore('model', () => {
     activeModelBackend.value = backend
   }
 
+  async function unloadModel() {
+    await invoke('unload_model')
+    activeModelId.value = null
+    activeModelBackend.value = null
+  }
+
+  watch([activeModelId, activeModelBackend], ([id, backend]) => {
+    if (id && backend) {
+      localStorage.setItem('activeModelId', id)
+      localStorage.setItem('activeModelBackend', backend)
+    } else if (!id && !backend) {
+      localStorage.removeItem('activeModelId')
+      localStorage.removeItem('activeModelBackend')
+    }
+  })
+
   watch(
     () => `${activeModelId.value}:${activeModelBackend.value}`,
     async (_newKey) => {
@@ -133,6 +164,7 @@ export const useModelStore = defineStore('model', () => {
     cancelDownload,
     removeModel,
     setActiveModel,
+    unloadModel,
     cleanup,
   }
 })
