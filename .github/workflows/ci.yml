@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  frontend:
+    name: Frontend (type-check + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      # Type-check + build the frontend bundle
+      - run: npm run build
+
+      # Vitest unit tests
+      - run: npm test
+
+  rust-test:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # cactus-sys must be available as a submodule.
+          # Add it with:
+          #   git submodule add <cactus-repo-url> cactus
+          # Then update Cargo.toml path dep to: path = "../cactus/rust/cactus-sys"
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # System libs needed by webkit2gtk (Tauri) and llama-cpp-2 on Linux
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  tauri-build:
+    name: Tauri build check
+    runs-on: macos-latest
+    needs: [frontend, rust-test]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      - name: Build Tauri app
+        run: npm run tauri build
+        env:
+          # Suppress code-signing for CI builds
+          APPLE_SIGNING_IDENTITY: '-'
