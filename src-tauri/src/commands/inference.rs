@@ -48,6 +48,19 @@ struct InferenceErrorPayload {
     error: String,
 }
 
+#[derive(Clone, Serialize)]
+struct ModelLoadedPayload {
+    model_id: String,
+    backend: String,
+}
+
+#[derive(Clone, Serialize)]
+struct ModelLoadErrorPayload {
+    model_id: String,
+    backend: String,
+    error: String,
+}
+
 #[derive(Serialize)]
 struct ApiMsg {
     role: String,
@@ -429,7 +442,7 @@ mod tests {
 
 
 #[tauri::command]
-pub fn load_model(
+pub async fn load_model(
     model_id: String,
     backend: Option<String>,
     app: AppHandle,
@@ -449,6 +462,9 @@ pub fn load_model(
             })
             .unwrap_or(false)
         {
+            // Already loaded — notify frontend so it can clear modelLoading
+            let backend_name = guard.as_ref().unwrap().backend_name.clone();
+            let _ = app.emit("model-loaded", ModelLoadedPayload { model_id, backend: backend_name });
             return Ok(());
         }
     }
@@ -485,17 +501,38 @@ pub fn load_model(
     }
     let model_path_str = model_path
         .to_str()
-        .ok_or("Invalid path encoding")?;
+        .ok_or("Invalid path encoding")?
+        .to_string();
 
-    let loaded_backend = load_backend(backend_kind, model_path_str)?;
-    let context_size = loaded_backend.context_size();
-
-    let mut guard = state.model.lock().unwrap();
-    *guard = Some(LoadedModel {
-        backend: Arc::from(loaded_backend),
-        model_id,
-        backend_name: backend_str,
-        context_size,
+    // Spawn the heavy load on a blocking thread so the UI stays responsive.
+    // The frontend clears modelLoading when it receives model-loaded/model-load-error.
+    let app_bg = app.clone();
+    let model_id_bg = model_id.clone();
+    let backend_str_bg = backend_str.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state_ref = app_bg.state::<AppState>();
+        match load_backend(backend_kind, &model_path_str) {
+            Ok(loaded) => {
+                let context_size = loaded.context_size();
+                *state_ref.model.lock().unwrap() = Some(LoadedModel {
+                    backend: Arc::from(loaded),
+                    model_id: model_id_bg.clone(),
+                    backend_name: backend_str_bg.clone(),
+                    context_size,
+                });
+                let _ = app_bg.emit("model-loaded", ModelLoadedPayload {
+                    model_id: model_id_bg,
+                    backend: backend_str_bg,
+                });
+            }
+            Err(e) => {
+                let _ = app_bg.emit("model-load-error", ModelLoadErrorPayload {
+                    model_id: model_id_bg,
+                    backend: backend_str_bg,
+                    error: e,
+                });
+            }
+        }
     });
 
     Ok(())

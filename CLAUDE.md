@@ -36,7 +36,7 @@ This is a **Tauri v2 desktop app** (Rust backend + Vue 3 frontend) for fully off
 - `SettingsView` — model management (install, switch, remove)
 
 **Pinia stores** are the primary state layer:
-- `modelStore` — catalog, installed models, active model, download progress. Watches `activeModelId` and preloads the model into the Rust backend whenever it changes. Active model (`activeModelId` + `activeModelBackend`) is persisted to `localStorage`; restored on startup by `loadInstalled`. The `initialized` flag ensures restore runs only once — `router/index.ts`'s `beforeEach` guard calls `loadInstalled()` on **every** navigation, so without this guard navigating would re-select a model the user just unloaded. `unloadModel()` clears both state and localStorage keys so the unloaded state survives app restart.
+- `modelStore` — catalog, installed models, active model, download progress. Watches `activeModelId` and triggers `load_model` whenever it changes. `load_model` is fire-and-forget (returns immediately); `modelLoading` is cleared by the `model-loaded`/`model-load-error` Tauri events, not the `invoke` return. Active model (`activeModelId` + `activeModelBackend`) is persisted to `localStorage`; restored on startup by `loadInstalled`. The `initialized` flag ensures restore runs only once — `router/index.ts`'s `beforeEach` guard calls `loadInstalled()` on **every** navigation, so without this guard navigating would re-select a model the user just unloaded. `unloadModel()` sets `localStorage` keys to `"none"` (not removes them) so the unloaded state survives restart; `loadInstalled` treats `savedId === 'none'` as "stay unloaded" and skips auto-selection.
 - `chatStore` — sessions, messages, streaming state. Listens to Tauri events (`token`, `inference-complete`, `inference-error`) to stream tokens into the active message in real time. Also runs the **tool-call loop**: on `inference-complete`, if the last assistant message contains a `<tool_call>` block, `chatStore` executes the tool and re-invokes `send_message` (capped at 5 iterations). `toolExecuting: ref<boolean>` is exposed for the UI spinner.
 
 **Tool-calling system** (`src/composables/useTools.ts`):
@@ -95,3 +95,5 @@ On macOS, dropping a Metal-backed llama.cpp model during AppKit termination trig
 | `download-progress` | Rust → JS | `{ model_id, bytes_downloaded, total_bytes, speed_bps, percentage, phase? }` — `phase: "extracting"` during ZIP extraction (speed_bps is 0) |
 | `download-complete` | Rust → JS | `{ model_id }` |
 | `download-error` | Rust → JS | `{ model_id, error }` |
+| `model-loaded` | Rust → JS | `{ model_id, backend }` — emitted after `load_model` completes in background |
+| `model-load-error` | Rust → JS | `{ model_id, backend, error }` — emitted if background load fails |

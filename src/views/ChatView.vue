@@ -432,6 +432,11 @@ function copyMessage(msg: { id: string; role: string; content: string; parsed?: 
 
     <!-- Main panel -->
     <div class="flex flex-1 flex-col overflow-hidden">
+      <!-- Indeterminate bar while model loads -->
+      <div v-if="modelStore.modelLoading" class="h-[2px] shrink-0 overflow-hidden bg-primary-950">
+        <div class="model-loading-bar h-full w-2/5 bg-gradient-to-r from-transparent via-primary-400 to-transparent" />
+      </div>
+
       <!-- Toolbar -->
       <header class="flex items-center justify-between px-5 h-14 border-b border-zinc-800 shrink-0">
         <div class="flex items-center gap-2">
@@ -441,8 +446,8 @@ function copyMessage(msg: { id: string; role: string; content: string; parsed?: 
           <span v-if="activeModel" class="text-xs text-zinc-600">
             · {{ activeModel.display_name }}
           </span>
-          <span v-if="modelStore.modelLoading" class="text-xs text-zinc-500 flex items-center gap-1">
-            <span class="inline-block h-2 w-2 rounded-full bg-primary-500 animate-pulse" />
+          <span v-if="modelStore.modelLoading" class="text-xs text-zinc-500 flex items-center gap-1.5">
+            <span class="h-3 w-3 shrink-0 rounded-full border-2 border-primary-900 border-t-primary-400 animate-spin" />
             Loading model…
           </span>
         </div>

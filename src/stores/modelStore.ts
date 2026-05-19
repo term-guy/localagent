@@ -35,14 +35,16 @@ export const useModelStore = defineStore('model', () => {
       if (installed.value.length > 0) {
         const savedId = localStorage.getItem('activeModelId')
         const savedBackend = localStorage.getItem('activeModelBackend')
-        if (savedId && savedBackend) {
+        if (savedId === 'none') {
+          // User explicitly unloaded — stay unloaded
+        } else if (savedId && savedBackend) {
           const saved = installed.value.find((m) => m.id === savedId && m.backend === savedBackend)
           if (saved) {
             activeModelId.value = saved.id
             activeModelBackend.value = saved.backend
           }
         } else if (!savedId) {
-          // No explicit unload recorded — pick first model as default
+          // No prior state recorded — pick first model as default
           activeModelId.value = installed.value[0].id
           activeModelBackend.value = installed.value[0].backend
         }
@@ -61,7 +63,23 @@ export const useModelStore = defineStore('model', () => {
     const unlisten3 = await listen<{ model_id: string; error: string }>('download-error', (e) => {
       delete downloadProgress.value[e.payload.model_id]
     })
-    unlisteners.value.push(unlisten1, unlisten2, unlisten3)
+    const unlisten4 = await listen<{ model_id: string; backend: string }>('model-loaded', (e) => {
+      const { model_id, backend } = e.payload
+      if (activeModelId.value === model_id && activeModelBackend.value === backend) {
+        modelLoading.value = false
+      }
+    })
+    const unlisten5 = await listen<{ model_id: string; backend: string; error: string }>(
+      'model-load-error',
+      (e) => {
+        const { model_id, backend, error } = e.payload
+        console.error(`Model load failed for ${model_id} (${backend}): ${error}`)
+        if (activeModelId.value === model_id && activeModelBackend.value === backend) {
+          modelLoading.value = false
+        }
+      },
+    )
+    unlisteners.value.push(unlisten1, unlisten2, unlisten3, unlisten4, unlisten5)
   }
 
   async function downloadModel(
@@ -114,8 +132,8 @@ export const useModelStore = defineStore('model', () => {
       localStorage.setItem('activeModelId', id)
       localStorage.setItem('activeModelBackend', backend)
     } else if (!id && !backend) {
-      localStorage.removeItem('activeModelId')
-      localStorage.removeItem('activeModelBackend')
+      localStorage.setItem('activeModelId', 'none')
+      localStorage.setItem('activeModelBackend', 'none')
     }
   })
 
@@ -130,10 +148,11 @@ export const useModelStore = defineStore('model', () => {
 
       modelLoading.value = true
       try {
+        // Returns immediately; modelLoading is cleared by the model-loaded/model-load-error event.
         await invoke('load_model', { modelId: id, backend })
       } catch (e) {
-        console.error(`Failed to preload model ${id} (${backend}):`, e)
-      } finally {
+        // Synchronous validation errors (e.g. inference in progress, model not found).
+        console.error(`Failed to load model ${id} (${backend}):`, e)
         if (activeModelId.value === id && activeModelBackend.value === backend) {
           modelLoading.value = false
         }

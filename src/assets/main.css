@@ -105,3 +105,11 @@
 .prose-chat a { @apply text-primary-400 hover:underline; }
 .prose-chat strong { @apply font-semibold text-zinc-100; }
 .prose-chat hr { @apply border-zinc-700 my-3; }
+
+@keyframes loading-bar {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(500%);  }
+}
+.model-loading-bar {
+  animation: loading-bar 1.5s ease-in-out infinite;
+}
