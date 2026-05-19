@@ -62,6 +62,7 @@ const mockInstalled: InstalledModel[] = [
 describe('modelStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    localStorage.clear()
     vi.clearAllMocks()
   })
 
@@ -101,16 +102,17 @@ describe('modelStore', () => {
       expect(store.activeModelBackend).toBe('llama_cpp')
     })
 
-    it('does not override existing active model selection', async () => {
+    it('stays unloaded when localStorage has none sentinel', async () => {
+      localStorage.setItem('activeModelId', 'none')
+      localStorage.setItem('activeModelBackend', 'none')
       vi.mocked(invoke).mockResolvedValue(mockInstalled)
 
       const store = useModelStore()
-      store.activeModelId = 'Bonsai-8B'
-      store.activeModelBackend = 'llama_cpp'
       await store.loadInstalled()
 
-      // Should keep the explicit selection
-      expect(store.activeModelId).toBe('Bonsai-8B')
+      expect(store.installed).toEqual(mockInstalled)
+      expect(store.activeModelId).toBeNull()
+      expect(store.activeModelBackend).toBeNull()
     })
 
     it('handles no installed models', async () => {
@@ -376,7 +378,7 @@ describe('modelStore', () => {
       await store.setupListeners()
       store.cleanup()
 
-      expect(unlistenFn).toHaveBeenCalledTimes(3)
+      expect(unlistenFn).toHaveBeenCalledTimes(5)
     })
   })
 
