@@ -1,0 +1,121 @@
+name: Release macOS (Apple Silicon)
+
+# Fires on version tags (e.g. v1.2.3) or a manual run from the Actions tab.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+# Needs write access to create the GitHub release.
+permissions:
+  contents: write
+
+jobs:
+  build-macos-arm:
+    runs-on: macos-14  # Apple Silicon M1 — native aarch64, Metal available
+
+    steps:
+      # ── Checkout ────────────────────────────────────────────────────────────
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive   # pulls in cactus/ (cactus-sys C++ source)
+
+      # ── Toolchains ──────────────────────────────────────────────────────────
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        # macos-14 is natively aarch64-apple-darwin — no cross-compilation needed
+
+      # ── Caches ──────────────────────────────────────────────────────────────
+      # Caching src-tauri/target saves ~10–15 min on incremental builds.
+      # Cargo.lock hash busts the cache when deps change.
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: macos-arm-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            macos-arm-cargo-
+
+      # ── Dependencies ─────────────────────────────────────────────────────────
+      - name: Install npm dependencies
+        run: npm ci
+
+      # ── Code signing setup ───────────────────────────────────────────────────
+      # Imports the Developer ID certificate into a temporary keychain so that
+      # the Tauri build can sign bundles without touching the login keychain.
+      #
+      # Required secrets (set in repo Settings → Secrets → Actions):
+      #   APPLE_CERTIFICATE          base64-encoded .p12 (Developer ID Application)
+      #   APPLE_CERTIFICATE_PASSWORD password for the .p12
+      #   APPLE_SIGNING_IDENTITY     e.g. "Developer ID Application: Acme Corp (TEAMID)"
+      #   APPLE_ID                   your Apple ID email
+      #   APPLE_PASSWORD             app-specific password (not your Apple ID password)
+      #   APPLE_TEAM_ID              10-char team ID from developer.apple.com
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/productbuild
+          rm "$RUNNER_TEMP/cert.p12"
+
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      # ── Build ────────────────────────────────────────────────────────────────
+      # tauri build: runs `npm run build` (vue-tsc + vite), then compiles Rust
+      # in release mode and bundles the .app + .dmg.
+      # Notarization is performed automatically by the Tauri CLI when
+      # APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID are set.
+      - name: Build and notarize
+        run: npm run tauri build
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      # ── Artifact ─────────────────────────────────────────────────────────────
+      # Always upload so you can grab the .dmg from the Actions run even on
+      # workflow_dispatch (where no release is created).
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: localagent-macos-arm64-${{ github.ref_name }}
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      # ── Release ──────────────────────────────────────────────────────────────
+      # Creates a draft-free GitHub release and attaches the .dmg.
+      # Only runs on actual tag pushes, not workflow_dispatch.
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/release/bundle/dmg/*.dmg
+          generate_release_notes: true   # auto-generates changelog from commits
