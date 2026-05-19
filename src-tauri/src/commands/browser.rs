@@ -72,7 +72,7 @@ async fn do_fetch(url: &str, max_chars: usize) -> Result<(String, String), Strin
     Ok((title, text))
 }
 
-fn extract_text(html: &str) -> (String, String) {
+pub(crate) fn extract_text(html: &str) -> (String, String) {
     let doc = Html::parse_document(html);
 
     let title = Selector::parse("title")
@@ -109,4 +109,121 @@ fn extract_text(html: &str) -> (String, String) {
     }
 
     (title, lines.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_text_title_and_paragraph() {
+        let html = "<html><head><title>Hello World</title></head><body><p>Some content here.</p></body></html>";
+        let (title, text) = extract_text(html);
+        assert_eq!(title, "Hello World");
+        assert!(text.contains("Some content here."), "text: {text}");
+    }
+
+    #[test]
+    fn test_extract_text_no_title_returns_empty_string() {
+        let html = "<html><body><p>No title here.</p></body></html>";
+        let (title, _) = extract_text(html);
+        assert_eq!(title, "");
+    }
+
+    #[test]
+    fn test_extract_text_headings() {
+        let html = "<html><body><h1>Main Heading</h1><h2>Sub Heading</h2><p>Paragraph.</p></body></html>";
+        let (_, text) = extract_text(html);
+        assert!(text.contains("Main Heading"), "text: {text}");
+        assert!(text.contains("Sub Heading"), "text: {text}");
+        assert!(text.contains("Paragraph."), "text: {text}");
+    }
+
+    #[test]
+    fn test_extract_text_deduplicates_repeated_content() {
+        // The same text appearing in multiple elements should appear only once.
+        let html = "<html><body><p>Repeated</p><p>Repeated</p><p>Unique</p></body></html>";
+        let (_, text) = extract_text(html);
+        let count = text.matches("Repeated").count();
+        assert_eq!(count, 1, "duplicate lines should be deduplicated; text: {text}");
+        assert!(text.contains("Unique"), "text: {text}");
+    }
+
+    #[test]
+    fn test_extract_text_skips_short_fragments() {
+        // Strings shorter than 4 chars should be filtered out.
+        let html = "<html><body><p>OK</p><p>Yes</p><p>Long enough content</p></body></html>";
+        let (_, text) = extract_text(html);
+        assert!(!text.contains("OK"), "short fragment 'OK' should be skipped; text: {text}");
+        assert!(!text.contains("Yes"), "short fragment 'Yes' should be skipped; text: {text}");
+        assert!(text.contains("Long enough content"), "text: {text}");
+    }
+
+    #[test]
+    fn test_extract_text_list_items() {
+        let html = "<html><body><ul><li>Item one</li><li>Item two</li></ul></body></html>";
+        let (_, text) = extract_text(html);
+        assert!(text.contains("Item one"), "text: {text}");
+        assert!(text.contains("Item two"), "text: {text}");
+    }
+
+    #[test]
+    fn test_extract_text_table_cells() {
+        let html = "<html><body><table><tr><th>Name</th><th>Value</th></tr><tr><td>Alpha cell</td><td>Beta cell</td></tr></table></body></html>";
+        let (_, text) = extract_text(html);
+        assert!(text.contains("Name"), "text: {text}");
+        assert!(text.contains("Value"), "text: {text}");
+        assert!(text.contains("Alpha cell"), "text: {text}");
+        assert!(text.contains("Beta cell"), "text: {text}");
+    }
+
+    #[test]
+    fn test_extract_text_title_whitespace_collapsed() {
+        let html = "<html><head><title>  Hello   World  </title></head><body><p>Content</p></body></html>";
+        let (title, _) = extract_text(html);
+        assert_eq!(title, "Hello World");
+    }
+
+    #[test]
+    fn test_extract_text_empty_document() {
+        let (title, text) = extract_text("");
+        assert_eq!(title, "");
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn test_extract_text_nav_and_script_elements_not_selected() {
+        // nav, script, style are not in our content selector — their text should NOT appear.
+        let html = r#"<html><body>
+            <nav>Nav link</nav>
+            <script>var x = 1;</script>
+            <style>.foo { color: red; }</style>
+            <p>Real content here</p>
+        </body></html>"#;
+        let (_, text) = extract_text(html);
+        assert!(!text.contains("Nav link"), "nav content should be excluded; text: {text}");
+        assert!(!text.contains("var x"), "script content should be excluded; text: {text}");
+        assert!(!text.contains(".foo"), "style content should be excluded; text: {text}");
+        assert!(text.contains("Real content here"), "text: {text}");
+    }
+
+    #[test]
+    fn test_max_chars_calculation() {
+        // Verify the formula: (context_size - RESERVED_TOKENS) * CHARS_PER_TOKEN, clamped.
+        // context_size=4096 → (4096-1500)*3 = 7788, within [1000, 12000]
+        let context_size: u32 = 4096;
+        let max_chars = (context_size.saturating_sub(1_500) * 3)
+            .clamp(1_000, 12_000) as usize;
+        assert_eq!(max_chars, 7788);
+
+        // Very small context → clamped to minimum 1000
+        let small: u32 = 100;
+        let max_small = (small.saturating_sub(1_500) * 3).clamp(1_000, 12_000) as usize;
+        assert_eq!(max_small, 1_000);
+
+        // Very large context → clamped to ceiling 12000
+        let large: u32 = 128_000;
+        let max_large = (large.saturating_sub(1_500) * 3).clamp(1_000, 12_000) as usize;
+        assert_eq!(max_large, 12_000);
+    }
 }
