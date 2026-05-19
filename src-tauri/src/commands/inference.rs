@@ -504,6 +504,12 @@ pub async fn load_model(
         .ok_or("Invalid path encoding")?
         .to_string();
 
+    // Snapshot the version before we start loading. If unload_model runs while the
+    // blocking load is in flight it bumps the version; the spawn_blocking checks for
+    // that mismatch under the model lock and discards the freshly-loaded model rather
+    // than overwriting the now-empty state.
+    let load_version = state.model_version.load(Ordering::SeqCst);
+
     // Spawn the heavy load on a blocking thread so the UI stays responsive.
     // The frontend clears modelLoading when it receives model-loaded/model-load-error.
     let app_bg = app.clone();
@@ -514,16 +520,22 @@ pub async fn load_model(
         match load_backend(backend_kind, &model_path_str) {
             Ok(loaded) => {
                 let context_size = loaded.context_size();
-                *state_ref.model.lock().unwrap() = Some(LoadedModel {
-                    backend: Arc::from(loaded),
-                    model_id: model_id_bg.clone(),
-                    backend_name: backend_str_bg.clone(),
-                    context_size,
-                });
-                let _ = app_bg.emit("model-loaded", ModelLoadedPayload {
-                    model_id: model_id_bg,
-                    backend: backend_str_bg,
-                });
+                let mut model_guard = state_ref.model.lock().unwrap();
+                if state_ref.model_version.load(Ordering::SeqCst) == load_version {
+                    *model_guard = Some(LoadedModel {
+                        backend: Arc::from(loaded),
+                        model_id: model_id_bg.clone(),
+                        backend_name: backend_str_bg.clone(),
+                        context_size,
+                    });
+                    drop(model_guard);
+                    let _ = app_bg.emit("model-loaded", ModelLoadedPayload {
+                        model_id: model_id_bg,
+                        backend: backend_str_bg,
+                    });
+                }
+                // else: unload (or another load) ran while we were loading; discard the
+                // result. `loaded` is dropped here, freeing any allocated model memory.
             }
             Err(e) => {
                 let _ = app_bg.emit("model-load-error", ModelLoadErrorPayload {
@@ -543,7 +555,11 @@ pub fn unload_model(state: State<'_, AppState>) -> Result<(), String> {
     if *state.inference_running.lock().unwrap() {
         return Err("Cannot unload model during active inference".into());
     }
-    state.model.lock().unwrap().take();
+    // Bump the version while holding the model lock so any load_model spawn_blocking
+    // that is still in flight sees the mismatch and discards its result.
+    let mut guard = state.model.lock().unwrap();
+    state.model_version.fetch_add(1, Ordering::SeqCst);
+    guard.take();
     Ok(())
 }
 
