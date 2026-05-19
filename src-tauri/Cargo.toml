@@ -35,7 +35,7 @@ open = "5"
 zip = "2"
 scraper = "0.20"
 
-cactus-sys = { path = "/Users/luis/gitterm/cactus/rust/cactus-sys" }
+cactus-sys = { path = "../cactus/rust/cactus-sys" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 llama-cpp-2 = { version = "0.1", features = ["metal"] }
