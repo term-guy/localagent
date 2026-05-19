@@ -44,7 +44,7 @@ async function cancelDownload(modelId: string) {
     <!-- Logo / header -->
     <div class="mb-10 text-center">
       <div class="mb-4 flex justify-center">
-        <div class="h-16 w-16 rounded-2xl bg-gradient-to-br from-primary-600 to-violet-700
+        <div class="h-16 w-16 rounded-2xl bg-gradient-to-br from-primary-600 to-primary-800
                     flex items-center justify-center shadow-lg shadow-primary-900/40">
           <span class="text-3xl">🤖</span>
         </div>

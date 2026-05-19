@@ -324,7 +324,7 @@ function copyMessage(msg: { id: string; role: string; content: string; parsed?: 
     >
       <!-- Logo -->
       <div class="flex items-center gap-2.5 px-3 py-4 border-b border-zinc-800 h-14">
-        <div class="h-8 w-8 shrink-0 rounded-lg bg-gradient-to-br from-primary-600 to-violet-700
+        <div class="h-8 w-8 shrink-0 rounded-lg bg-gradient-to-br from-primary-600 to-primary-800
                     flex items-center justify-center">
           <span class="text-sm">🤖</span>
         </div>
@@ -497,7 +497,7 @@ function copyMessage(msg: { id: string; role: string; content: string; parsed?: 
             <div
               v-if="msg.role === 'assistant'"
               class="mr-2.5 mt-1 h-7 w-7 shrink-0 rounded-full bg-gradient-to-br
-                     from-primary-600 to-violet-700 flex items-center justify-center text-xs"
+                     from-primary-600 to-primary-800 flex items-center justify-center text-xs"
             >
               🤖
             </div>
