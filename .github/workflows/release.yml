@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build-macos-arm:
-    runs-on: macos-14  # Apple Silicon M1 — native aarch64, Metal available
+    runs-on: macos-15  # Apple Silicon M-series, Xcode 16 — matches local dev env
 
     steps:
       # ── Checkout ────────────────────────────────────────────────────────────
@@ -43,9 +43,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: macos-arm-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: macos15-arm-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            macos-arm-cargo-
+            macos15-arm-cargo-
 
       # ── Dependencies ─────────────────────────────────────────────────────────
       - name: Install npm dependencies
