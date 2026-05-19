@@ -21,6 +21,15 @@ use crate::backend::{Backend, InferenceStats};
 // the OS reclaims all memory on process exit regardless.
 static LLAMA_BACKEND: OnceLock<&'static LlamaBackend> = OnceLock::new();
 
+fn decode_error_message(e: llama_cpp_2::DecodeError) -> String {
+    let s = e.to_string();
+    if s.contains("-3") {
+        "Not enough GPU memory to run this model. Try a smaller or lower-quantization version (e.g., Q4_K_M instead of Q8_0).".to_string()
+    } else {
+        s
+    }
+}
+
 fn init_backend() -> &'static LlamaBackend {
     LLAMA_BACKEND.get_or_init(|| {
         Box::leak(Box::new(LlamaBackend::init().expect("llama backend init failed")))
@@ -163,7 +172,7 @@ impl Backend for LlamaCppBackend {
                 .add(token, i as i32, &[0], i == n_prompt - 1)
                 .map_err(|e| e.to_string())?;
         }
-        ctx.decode(&mut batch).map_err(|e: llama_cpp_2::DecodeError| e.to_string())?;
+        ctx.decode(&mut batch).map_err(|e: llama_cpp_2::DecodeError| decode_error_message(e))?;
 
         let mut sampler = LlamaSampler::chain_simple([
             LlamaSampler::top_p(0.9, 1),
@@ -230,7 +239,7 @@ impl Backend for LlamaCppBackend {
                 .add(new_token, n_cur as i32, &[0], true)
                 .map_err(|e| e.to_string())?;
             ctx.decode(&mut batch)
-                .map_err(|e: llama_cpp_2::DecodeError| e.to_string())?;
+                .map_err(|e: llama_cpp_2::DecodeError| decode_error_message(e))?;
 
             n_cur += 1;
         }

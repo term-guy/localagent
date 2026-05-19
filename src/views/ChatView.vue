@@ -282,11 +282,14 @@ function detectToolResult(content: string): ToolResultInfo | null {
 const parsedMessages = computed(() =>
   chatStore.messages.map((msg, i) => {
     const isActive = chatStore.isStreaming && i === chatStore.messages.length - 1
-    const toolCall = msg.role === 'assistant' ? detectToolCall(msg.content) : null
+    const isError = msg.role === 'assistant' && msg.content.startsWith('⚠️ Error:')
+    const toolCall = msg.role === 'assistant' && !isError ? detectToolCall(msg.content) : null
     const toolResult = msg.role === 'user' ? detectToolResult(msg.content) : null
     return {
       ...msg,
-      parsed: msg.role === 'assistant'
+      isError,
+      errorText: isError ? msg.content.replace(/^⚠️ Error:\s*/, '') : null,
+      parsed: msg.role === 'assistant' && !isError
         ? parseContent(msg.content, toolCall, isActive)
         : null as ParsedContent | null,
       toolCall,
@@ -575,9 +578,23 @@ function copyMessage(msg: { id: string; role: string; content: string; parsed?: 
                 <div class="border-t border-zinc-700/40 px-3 py-2.5 text-zinc-400 prose-chat" v-html="renderMarkdown(block)" />
               </details>
 
+              <!-- Error card (inference failed) -->
+              <div
+                v-if="msg.isError"
+                class="rounded-2xl px-4 py-3 text-sm bg-red-950/60 border border-red-800/50 rounded-tl-sm"
+              >
+                <div class="flex items-start gap-2.5">
+                  <span class="text-red-400 mt-0.5 shrink-0">⚠</span>
+                  <div>
+                    <p class="text-red-300 font-medium text-xs mb-1">Generation failed</p>
+                    <p class="text-red-200/70 text-xs leading-relaxed">{{ msg.errorText }}</p>
+                  </div>
+                </div>
+              </div>
+
               <!-- Bubble: any text before/around the tool call renders here, before the chip -->
               <div
-                v-if="(!msg.toolCall || msg.parsed?.responseContent) && (!msg.parsed?.isThinking || msg.parsed?.responseContent)"
+                v-else-if="(!msg.toolCall || msg.parsed?.responseContent) && (!msg.parsed?.isThinking || msg.parsed?.responseContent)"
                 class="rounded-2xl px-4 py-3 text-sm"
                 :class="msg.role === 'user'
                   ? 'bg-primary-700 text-white rounded-tr-sm'
