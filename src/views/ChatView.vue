@@ -8,6 +8,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import type { InstalledModel } from '@/types'
 import MarkdownIt from 'markdown-it'
 import ToolsMenu from '@/components/ToolsMenu.vue'
+import appIcon from '@/assets/icon.png'
 import { getToolSystemPrompt, parseToolCall } from '@/composables/useTools'
 
 const chatStore = useChatStore()
@@ -336,10 +337,7 @@ function copyMessage(msg: { id: string; role: string; content: string; parsed?: 
     >
       <!-- Logo -->
       <div class="flex items-center gap-2.5 px-3 py-4 border-b border-zinc-800 h-14">
-        <div class="h-8 w-8 shrink-0 rounded-lg bg-gradient-to-br from-primary-600 to-primary-800
-                    flex items-center justify-center">
-          <span class="text-sm">🤖</span>
-        </div>
+        <img :src="appIcon" alt="localagent" class="h-8 w-8 shrink-0 rounded-lg" />
         <span v-if="sidebarOpen" class="font-semibold text-sm text-zinc-100 truncate">localagent</span>
         <button
           class="ml-auto text-zinc-500 hover:text-zinc-300 transition-colors"
@@ -470,9 +468,7 @@ function copyMessage(msg: { id: string; role: string; content: string; parsed?: 
           v-if="chatStore.messages.length === 0"
           class="flex flex-col items-center justify-center h-full text-center gap-4"
         >
-          <div class="h-16 w-16 rounded-2xl bg-zinc-800 flex items-center justify-center text-3xl">
-            🤖
-          </div>
+          <img :src="appIcon" alt="localagent" class="h-16 w-16 rounded-2xl" />
           <div>
             <p class="text-lg font-semibold text-zinc-300">How can I help you today?</p>
             <p class="text-sm text-zinc-500 mt-1">Start a conversation with your local AI</p>
@@ -520,13 +516,12 @@ function copyMessage(msg: { id: string; role: string; content: string; parsed?: 
             :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
           >
             <!-- Assistant avatar -->
-            <div
+            <img
               v-if="msg.role === 'assistant'"
-              class="mr-2.5 mt-1 h-7 w-7 shrink-0 rounded-full bg-gradient-to-br
-                     from-primary-600 to-primary-800 flex items-center justify-center text-xs"
-            >
-              🤖
-            </div>
+              :src="appIcon"
+              alt="localagent"
+              class="mr-2.5 mt-1 h-7 w-7 shrink-0 rounded-full"
+            />
 
             <!-- Copy button: left of bubble for user messages -->
             <button

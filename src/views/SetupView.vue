@@ -7,6 +7,7 @@ import { listen } from '@tauri-apps/api/event'
 import ModelCard from '@/components/ModelCard.vue'
 import HfRepoImporter from '@/components/HfRepoImporter.vue'
 import type { ModelInfo, DownloadRequest } from '@/types'
+import appIcon from '@/assets/icon.png'
 
 const router = useRouter()
 const modelStore = useModelStore()
@@ -44,10 +45,7 @@ async function cancelDownload(modelId: string) {
     <!-- Logo / header -->
     <div class="mb-10 text-center">
       <div class="mb-4 flex justify-center">
-        <div class="h-16 w-16 rounded-2xl bg-gradient-to-br from-primary-600 to-primary-800
-                    flex items-center justify-center shadow-lg shadow-primary-900/40">
-          <span class="text-3xl">🤖</span>
-        </div>
+        <img :src="appIcon" alt="localagent" class="h-16 w-16 rounded-2xl shadow-lg shadow-primary-900/40" />
       </div>
       <h1 class="text-3xl font-bold text-zinc-100 tracking-tight">localagent</h1>
       <p class="mt-2 text-zinc-400">Your private AI assistant — fully offline</p>
